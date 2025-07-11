@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Looping Parkour Game Scene</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Inter', sans-serif; background-color: #282c34; color: #e0e0e0; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        .info-box {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px;
+            border-radius: 10px;
+            color: #fff;
+            font-size: 14px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            z-index: 10; /* Ensure it's above the canvas */
+        }
+        .info-box h2 {
+            margin-top: 0;
+            color: #64ffda;
+        }
+        .info-box p {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="info-box">
+        <h2>3D Looping Parkour Scene</h2>
+        <p>Watch a pawn navigate an elevated looping parkour course!</p>
+        <p>Walls have point values indicating difficulty.</p>
+        <p>Now with 400 shorter spaghetti noodles falling with a mass of 0.25, below the course!</p>
+        <p>Includes designated spaces for ad inserts!</p>
+        <p>The camera automatically follows the pawn.</p>
+    </div>
+
+    <script type="module">
+        // Global variables for Three.js scene components
+        let scene, camera, renderer, pawn;
+        let pathCurve;
+        let pathProgress = 0;
+        const pathSpeed = 0.0005; // Adjust this to change pawn speed
+        const baseGravityAcceleration = 0.02; // Base acceleration due to gravity
+
+        // Elevation offset for the entire course
+        const courseElevationOffset = 10;
+        const groundY = -2.25 + courseElevationOffset; // Y-coordinate of the ground plane, elevated
+
+        let noodleObjects = []; // Array to store all noodle meshes for gravity simulation
+
+        // Define colors for the parkour panels
+        const colors = {
+            pink: 0xFFC0CB,
+            green: 0x00FF00,
+            yellow: 0xFFFF00,
+            pawnBlue: 0x0000FF, // Color for the pawn
+            groundGrey: 0x333333,
+            invertedPanelColor: 0x8A2BE2, // BlueViolet for the inverted panel
+            spaghettiColor: 0xD2B48C, // Tan for spaghetti noodles
+            adPanelColor: 0xE0E0E0 // Light grey for ad panels
+        };
+
+        /**
+         * Initializes the Three.js scene, camera, renderer, and objects.
+         */
+        function init() {
+            // 1. Scene: Where all objects, cameras, and lights are placed.
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x444444); // Dark grey background
+
+            // 2. Camera: Defines the perspective from which the scene is viewed.
+            // PerspectiveCamera(fov, aspect, near, far)
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // Camera position will be updated in animate loop to follow pawn
+
+            // 3. Renderer: Renders the scene onto a canvas.
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight); // Set renderer size to full window
+            document.body.appendChild(renderer.domElement); // Add canvas to the DOM
+
+            // 4. Lighting: Add some basic lights to illuminate the scene
+            const ambientLight = new THREE.AmbientLight(0x404040); // Soft white light
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8); // White light from a direction
+            directionalLight.position.set(5, 10, 7); // Position the light
+            scene.add(directionalLight);
+
+            // 5. Create Parkour Panels and Path
+            createParkourCourse();
+            createPawn();
+
+            // Handle window resizing to keep the aspect ratio correct
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        /**
+         * Creates a single panel (box) with specified dimensions, position, and color, and optional text.
+         * @param {number} width - Width of the panel.
+         * @param {number} height - Height of the panel.
+         * @param {number} depth - Depth of the panel.
+         * @param {number} x - X position.
+         * @param {number} y - Y position.
+         * @param {number} z - Z position.
+         * @param {number} color - Hexadecimal color value.
+         * @param {string} [text] - Optional text to display on the panel.
+         * @param {string} [textColor='white'] - Color of the text.
+         * @param {number} [rotationY=0] - Optional rotation around Y axis in radians.
+         */
+        function createPanel(width, height, depth, x, y, z, color, text = null, textColor = 'white', rotationY = 0) {
+            const geometry = new THREE.BoxGeometry(width, height, depth);
+            // Use MeshStandardMaterial for better lighting interaction
+            const material = new THREE.MeshStandardMaterial({ color: color, roughness: 0.5, metalness: 0.1 });
+            const panel = new THREE.Mesh(geometry, material);
+            panel.position.set(x, y, z);
+            panel.rotation.y = rotationY; // Apply Y rotation
+            scene.add(panel);
+
+            if (text) {
+                // Create a canvas for the text texture
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.width = 512; // Power of 2 for optimal texture performance
+                canvas.height = 256;
+
+                // Semi-transparent background for text to make it stand out
+                context.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                context.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Set font properties
+                context.font = 'Bold 100px Inter'; // Use 'Inter' font as defined in CSS
+                context.fillStyle = textColor;
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                context.fillText(text, canvas.width / 2, canvas.height / 2);
+
+                // Create a Three.js texture from the canvas
+                const texture = new THREE.CanvasTexture(canvas);
+                texture.needsUpdate = true; // Important to update the texture
+
+                // Create a material for the text plane (MeshBasicMaterial doesn't react to lights)
+                const textMaterial = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide });
+                // Create a plane geometry slightly smaller than the panel face
+                const textGeometry = new THREE.PlaneGeometry(width * 0.9, height * 0.9);
+
+                const textMesh = new THREE.Mesh(textGeometry, textMaterial);
+
+                // Position the text mesh slightly in front of one face of the panel
+                // Make it a child of the panel so it moves with the panel
+                // This places it on the positive Z face of the panel's local coordinate system
+                textMesh.position.set(0, 0, depth / 2 + 0.01);
+                panel.add(textMesh); // Add textMesh as a child of the panel
+            }
+        }
+
+        /**
+         * Creates a curved panel using CylinderGeometry.
+         * @param {number} radiusTop - Radius of the top of the cylinder.
+         * @param {number} radiusBottom - Radius of the bottom of the cylinder.
+         * @param {number} height - Height of the cylinder.
+         * @param {number} radialSegments - Number of segmented faces around the circumference of the cylinder.
+         * @param {number} heightSegments - Number of rows of faces along the height of the cylinder.
+         * @param {boolean} openEnded - Whether the ends of the cylinder are open or capped.
+         * @param {number} thetaStart - Start angle for the first segment, default = 0.
+         * @param {number} thetaLength - The length of the arc for the segment, default = 2π.
+         * @param {number} x - X position.
+         * @param {number} y - Y position.
+         * @param {number} z - Z position.
+         * @param {number} rotationX - Rotation around X axis in radians.
+         * @param {number} rotationY - Rotation around Y axis in radians.
+         * @param {number} rotationZ - Rotation around Z axis in radians.
+         * @param {number} color - Hexadecimal color value.
+         */
+        function createCurvedPanel(radiusTop, radiusBottom, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength, x, y, z, rotationX, rotationY, rotationZ, color) {
+            const geometry = new THREE.CylinderGeometry(radiusTop, radiusBottom, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength);
+            const material = new THREE.MeshStandardMaterial({ color: color, roughness: 0.5, metalness: 0.1 });
+            const panel = new THREE.Mesh(geometry, material);
+            panel.position.set(x, y, z);
+            panel.rotation.set(rotationX, rotationY, rotationZ);
+            scene.add(panel);
+            return panel;
+        }
+
+        /**
+         * Creates a spaghetti noodle using TubeGeometry along a set of points.
+         * @param {Array<THREE.Vector3>} points - Array of Vector3 points defining the noodle's path.
+         * @param {number} radius - Radius of the noodle.
+         * @param {number} tubularSegments - Number of segments along the noodle's length.
+         * @param {number} radialSegments - Number of segments around the noodle's circumference.
+         * @param {number} color - Hexadecimal color value.
+         * @param {number} mass - Mass of the noodle for gravity simulation.
+         */
+        function createSpaghettiNoodle(points, radius, tubularSegments, radialSegments, color, mass) {
+            const path = new THREE.CatmullRomCurve3(points);
+            const geometry = new THREE.TubeGeometry(path, tubularSegments, radius, radialSegments, false); // false for no closed ends
+            const material = new THREE.MeshStandardMaterial({ color: color, roughness: 0.7, metalness: 0.0 });
+            const noodle = new THREE.Mesh(geometry, material);
+            scene.add(noodle);
+
+            // Add properties for gravity simulation
+            noodle.velocity = new THREE.Vector3(0, 0, 0);
+            noodle.isFalling = true;
+            noodle.mass = mass; // Assign the mass property
+            noodleObjects.push(noodle); // Store noodle for animation loop updates
+        }
+
+        /**
+         * Creates the pawn object.
+         */
+        function createPawn() {
+            const geometry = new THREE.BoxGeometry(0.8, 0.8, 0.8); // Small box for pawn
+            const material = new THREE.MeshStandardMaterial({ color: colors.pawnBlue, roughness: 0.3, metalness: 0.7 });
+            pawn = new THREE.Mesh(geometry, material);
+            scene.add(pawn);
+        }
+
+        /**
+         * Creates a series of panels to form a simple parkour course and defines the camera path.
+         */
+        function createParkourCourse() {
+            // Ground Plane - Elevated
+            createPanel(50, 0.5, 50, 0, -2.25 + courseElevationOffset, 0, colors.groundGrey);
+
+            // Define points for the looping path - Elevated
+            const pathPoints = [
+                new THREE.Vector3(0, 0.25, 0), // Start
+                new THREE.Vector3(5, 0.75, -3),
+                new THREE.Vector3(10, 1.75, -6),
+                new THREE.Vector3(12, 1.75, -10),
+                new THREE.Vector3(15, 2.25, -14),
+                new THREE.Vector3(18, 2.75, -16),
+                new THREE.Vector3(22, 3.75, -18),
+                new THREE.Vector3(28, 4.25, -20),
+                new THREE.Vector3(30, 4.25, -10), // Turning back
+
+                // Start of the curved/inverted section
+                new THREE.Vector3(25, 3.0, 0),
+                new THREE.Vector3(20, 1.0, 5), // Entering the curve
+                new THREE.Vector3(15, -1.0, 7), // Deepest point of the curve (inverted)
+                new THREE.Vector3(10, 1.0, 5), // Exiting the curve
+                // End of the curved/inverted section
+
+                new THREE.Vector3(5, 1.0, 3),
+                new THREE.Vector3(0, 0.25, 0) // Loop back to start
+            ].map(point => point.add(new THREE.Vector3(0, courseElevationOffset, 0))); // Apply elevation offset
+
+            // Create a smooth curve from the path points
+            pathCurve = new THREE.CatmullRomCurve3(pathPoints, true); // true for closed loop
+
+            // Create panels along the path - Elevated
+            createPanel(4, 0.5, 4, 0, 0 + courseElevationOffset, 0, colors.green); // Start
+            createPanel(3, 0.5, 3, 5, 0.5 + courseElevationOffset, -3, colors.pink);
+            createPanel(3, 0.5, 3, 10, 1.5 + courseElevationOffset, -6, colors.yellow);
+            createPanel(1, 0.5, 6, 12, 1.5 + courseElevationOffset, -10, colors.green); // Bridge
+            createPanel(2, 0.5, 2, 15, 2.0 + courseElevationOffset, -14, colors.pink);
+            createPanel(2, 0.5, 2, 18, 2.5 + courseElevationOffset, -16, colors.yellow);
+            createPanel(4, 0.5, 4, 22, 3.5 + courseElevationOffset, -18, colors.green); // High platform
+            createPanel(0.5, 3, 4, 22, 1.5 + courseElevationOffset, -16, colors.pink); // Wall obstacle (original)
+            createPanel(5, 0.5, 5, 28, 4.0 + courseElevationOffset, -20, colors.yellow); // Final platform before loop back
+
+            // Panels for the loop back section (before the curve) - Elevated
+            createPanel(4, 0.5, 4, 30, 4.0 + courseElevationOffset, -10, colors.green);
+            createPanel(4, 0.5, 4, 25, 2.5 + courseElevationOffset, 0, colors.pink);
+
+            // Curved Half-Pipe / Inverted Movement Section - Elevated
+            createCurvedPanel(
+                7, 7, 15, 32, 1, false, // Half-pipe dimensions
+                0, Math.PI, // Half-circle (180 degrees)
+                15, -1 + courseElevationOffset, 0, // Position (centered around X=15, Y=-1, Z=0)
+                -Math.PI / 2, 0, 0, // Rotation: X-axis to lay it flat
+                colors.invertedPanelColor // Distinct color for the inverted section
+            );
+
+            // Panels for the loop back section (after the curve) - Elevated
+            createPanel(4, 0.5, 4, 15, 1.5 + courseElevationOffset, 5, colors.yellow); // Exiting the curve
+            createPanel(4, 0.5, 4, 5, 0.5 + courseElevationOffset, 3, colors.green);
+
+            // Wall Panels with Point Values - Elevated
+            createPanel(0.5, 3.0, 3.0, 7, 1.5 + courseElevationOffset, -4.5, colors.pink, "10 Pts", "white");
+            createPanel(0.5, 4.0, 3.0, 12, 2.0 + courseElevationOffset, -10, colors.yellow, "20 Pts", "black");
+            createPanel(0.5, 5.0, 3.0, 25, 4.5 + courseElevationOffset, -19, colors.green, "30 Pts", "white");
+
+            // NEW: Ad Insert Spaces
+            // Ad Panel 1: Near the start
+            createPanel(8, 4, 0.2, -8, 2 + courseElevationOffset, -5, colors.adPanelColor, "Ad Space", "black", Math.PI / 4); // Rotated for better visibility
+
+            // Ad Panel 2: Mid-course, near the bridge
+            createPanel(6, 3, 0.2, 15, 2.5 + courseElevationOffset, -12, colors.adPanelColor, "Ad Space", "black", -Math.PI / 6);
+
+            // Ad Panel 3: Near the inverted section
+            createPanel(10, 5, 0.2, 20, 0 + courseElevationOffset, 10, colors.adPanelColor, "Ad Space", "black", Math.PI / 2); // Facing along Z axis
+
+            // Ad Panel 4: Near the end of the loop
+            createPanel(7, 3.5, 0.2, -5, 1 + courseElevationOffset, 8, colors.adPanelColor, "Ad Space", "black", -Math.PI / 4);
+
+
+            // Generate 400 Spaghetti Noodles!
+            const numberOfNoodles = 400; // Increased to 400
+            const noodleMass = 0.25; // Define the mass for all noodles
+            const sceneBounds = {
+                minX: -25, maxX: 35,
+                minY: 5, maxY: 15, // Start noodles higher up, relative to original ground
+                minZ: -25, maxZ: 15
+            };
+
+            for (let i = 0; i < numberOfNoodles; i++) {
+                const noodlePoints = [];
+                // Shorter noodles: 2 to 3 segments
+                const numSegments = Math.floor(Math.random() * 2) + 2;
+                const noodleRadius = Math.random() * 0.05 + 0.05; // Radius between 0.05 and 0.1
+
+                for (let j = 0; j < numSegments; j++) {
+                    const x = Math.random() * (sceneBounds.maxX - sceneBounds.minX) + sceneBounds.minX;
+                    const y = Math.random() * (sceneBounds.maxY - sceneBounds.minY) + sceneBounds.minY;
+                    const z = Math.random() * (sceneBounds.maxZ - sceneBounds.minZ) + sceneBounds.minZ;
+                    noodlePoints.push(new THREE.Vector3(x, y, z));
+                }
+                createSpaghettiNoodle(noodlePoints, noodleRadius, 64, 8, colors.spaghettiColor, noodleMass);
+            }
+        }
+
+        /**
+         * Handles window resizing to maintain correct aspect ratio and renderer size.
+         */
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix(); // Update camera's projection matrix
+            renderer.setSize(window.innerWidth, window.innerHeight); // Resize renderer
+        }
+
+        /**
+         * The animation loop. This function is called repeatedly to render frames.
+         */
+        function animate() {
+            requestAnimationFrame(animate); // Request the next frame
+
+            // Update path progress for pawn
+            pathProgress += pathSpeed;
+            if (pathProgress > 1) {
+                pathProgress -= 1; // Loop back
+            }
+
+            // Get the current position on the path for the pawn
+            const pawnPosition = pathCurve.getPointAt(pathProgress);
+            pawn.position.copy(pawnPosition);
+
+            // Get the tangent (direction) of the path at the current point
+            const pawnTangent = pathCurve.getTangentAt(pathProgress).normalize();
+
+            // Create a dummy object to use its lookAt method for pawn rotation
+            const dummy = new THREE.Object3D();
+            dummy.position.copy(pawn.position);
+            dummy.lookAt(pawn.position.clone().add(pawnTangent)); // Make dummy look in direction of tangent
+            pawn.quaternion.copy(dummy.quaternion); // Copy dummy's rotation to pawn
+
+            // Get a point slightly ahead on the path for camera lookAt
+            const lookAtPoint = pathCurve.getPointAt( (pathProgress + 0.02) % 1 ); // Look slightly ahead
+
+            // Set camera position relative to the pawn
+            camera.position.set(
+                pawn.position.x - pawnTangent.x * 5, // Behind pawn, aligned with tangent
+                pawn.position.y + 3, // Above pawn
+                pawn.position.z - pawnTangent.z * 5  // Behind pawn, aligned with tangent
+            );
+            camera.lookAt(lookAtPoint); // Make camera look at the point slightly ahead
+
+            // Apply gravity to noodles
+            noodleObjects.forEach(noodle => {
+                if (noodle.isFalling) {
+                    // Apply gravity based on noodle's mass
+                    noodle.velocity.y -= baseGravityAcceleration * noodle.mass;
+                    noodle.position.y += noodle.velocity.y; // Update position
+
+                    // Simple collision detection with the ground plane
+                    // Assuming noodle's origin is its center, and its "height" is roughly its radius * 2
+                    // For TubeGeometry, the effective "bottom" is approximately its position.y - radius
+                    if (noodle.position.y - noodle.geometry.parameters.radius <= groundY) {
+                        noodle.position.y = groundY + noodle.geometry.parameters.radius; // Snap to ground
+                        noodle.isFalling = false; // Stop falling
+                        noodle.velocity.y = 0; // Reset velocity
+                    }
+                }
+            });
+
+            renderer.render(scene, camera); // Render the scene
+        }
+
+        // Initialize the scene and start the animation loop when the window loads
+        window.onload = function() {
+            init();
+            animate();
+        };
+    </script>
+</body>
+</html>
